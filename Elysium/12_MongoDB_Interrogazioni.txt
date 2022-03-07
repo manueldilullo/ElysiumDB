@@ -1,0 +1,212 @@
+/*STAMPA L'INFORMAZIONI ED ELENCO MISSIONI DI TUTTI I PERSONAGGI CHE NON HANNO COMPLETATO NEMMENO UNA MISSIONE*/
+db.personaggi.getPlanCache().clear()
+var before = new Date()
+db.personaggi.find( { $where: function(){
+    check = true;
+    for(i = 0; i < this.missioni.length; i++){
+        if(this.missioni[i].stato == "Completata") 
+        {   
+            check = false; 
+            break;
+        }
+    }
+    return check;
+} } , {inventario:0, abilita:0, statistiche:0}).pretty()
+var after = new Date()
+execution_millis = after - before
+
+
+/* QUERY PRECEDENTE IN MySQL*/
+RESET QUERY CACHE;
+FLUSH QUERY CACHE;
+set profiling=1;
+
+SELECT personaggi.nome, SUM(case when stato = 'Completata' then 1 else 0 end) AS Completate
+FROM personaggi LEFT JOIN assegnare ON personaggi.nome = assegnare.personaggio
+GROUP BY personaggi.nome 
+HAVING Completate = 0;
+
+set profiling=0;
+show profiles;
+
+
+
+/************************************************************************************************************************/
+
+
+/* MISSIONI COMPLETATE, ATTIVE E DIFFERENZA TRA LE DUE PER OGNI PERSONAGGIO */
+db.personaggi.getPlanCache().clear()
+var before = new Date()
+db.personaggi.aggregate([
+    {$unwind: "$missioni"},
+    {
+        $group: {
+            _id:"$_id",
+            N_Completate: {$sum : {$cond: [ { $eq: ["$missioni.stato","Completata"] } , 1, 0]  }},
+            N_Attive: {$sum : {$cond: [ { $eq: ["$missioni.stato","Attiva"] } , 1, 0]  }},
+        }   
+    },
+    {
+        $addFields: {
+            Differenza: {$subtract: ["$N_Completate", "$N_Attive"] }
+        }
+    }
+],
+{ allowDiskUse: true}
+)
+var after = new Date()
+execution_millis = after - before
+
+
+/* QUERY PRECEDENTE IN MySQL*/
+RESET QUERY CACHE;
+FLUSH QUERY CACHE;
+set profiling=1;
+
+SELECT Nome, Totale, Completate, Attive, (Completate - Attive) AS Differenza
+FROM ( SELECT personaggio as Nome,
+              COUNT(*) AS Totale,
+              SUM(case when stato = 'Completata' then 1 else 0 end) AS Completate,
+              SUM(case when stato = 'Attiva' then 1 else 0 end) AS Attive
+        FROM assegnare
+        GROUP BY personaggio
+    ) as Conteggio;
+
+set profiling=0;
+show profiles;
+
+
+/************************************************************************************************************************/
+
+
+
+
+
+/* TOTALE OGGETTI IN INVENTARIO E MEDIA PER PERSONAGGIO */
+db.personaggi.getPlanCache().clear()
+var before = new Date()
+db.personaggi.aggregate([
+    {$group: 
+        {   
+            "_id": null,
+            totale_personaggi: {$sum:1},
+            totale_inventario:{ $sum: {$sum: "$inventario.quantita"}}, 
+            media:{ $avg : {$sum: "$inventario.quantita"}}
+        }
+    }
+])
+var after = new Date()
+execution_millis = after - before
+
+
+/* QUERY PRECEDENTE IN MySQL*/
+RESET QUERY CACHE;
+FLUSH QUERY CACHE;
+set profiling=1;
+
+SELECT SUM(quantità), AVG(quantità)
+FROM inventario;
+
+set profiling=0;
+show profiles;
+
+
+
+
+
+
+/************************************************************************************************************************/
+
+
+/*STAMPA NUMERO E PERCENTUALE MISSIONI COMPLETATE DI TUTTI I PERSONAGGI RAGGRUPPATI PER GILDA*/  
+db.personaggi.aggregate([
+    {$unwind: "$missioni"},
+    {
+        $group: {
+            _id:"$gilda",
+            N_Completate: {$sum : {$cond: [ { $eq: ["$missioni.stato","Completata"] } , 1, 0]  }},
+            Totale: {$sum : 1}
+        }   
+    },
+    {
+        $addFields: {
+            Percentuale: { 
+                $concat: [ 
+                    { $convert:
+                        { 
+                            input: { $round: [ {$divide: [ {$multiply: ["$N_Completate", 100] }, "$Totale"]}, 2] },
+                            to: "string"
+                        }
+                    },
+                    "%"
+                ]
+            }
+        }
+    }
+],
+{ allowDiskUse: true}
+)
+
+
+/* QUERY PRECEDENTE IN MySQL*/
+RESET QUERY CACHE;
+FLUSH QUERY CACHE;
+set profiling=1;
+
+SELECT personaggi.gilda, AVG(assegnare.*)
+FROM personaggi JOIN assegnare ON personaggi.nome = assegnare.personaggio
+WHERE assegnare.stato = "Completata";
+
+set profiling=0;
+show profiles;
+
+
+
+
+/************************************************************************************************************************/
+
+/* ID PERSONAGGI CHE POSSEGGONO UN'OGGETTO CHE HA EFFETTO SU "Carisma" */
+db.personaggi.getPlanCache().clear()
+var before = new Date()
+db.personaggi.aggregate([
+    {
+        $lookup: {
+            "localField": "inventario.nome",
+            "from": "oggetti",
+            "foreignField": "nome",
+            "as": "lista_oggetti"
+        }
+    },
+    {
+        $unwind : "$lista_oggetti",
+    },
+    {
+        $match : {
+            "lista_oggetti.effetti.carisma": {$exists:true}             
+        }
+    },
+    {
+        $project:{
+            "_id":"$_id",
+            "nome_oggetto":"$lista_oggetti.nome",
+            "carisma":"$lista_oggetti.effetti.carisma" 
+        }
+    }
+]
+).pretty()
+var after = new Date()
+execution_millis = after - before
+
+
+/* QUERY PRECEDENTE IN MySQL*/
+RESET QUERY CACHE;
+FLUSH QUERY CACHE;
+set profiling=1;
+
+SELECT inventario.personaggio, inventario.oggetto, influenzare.statistica, influenzare.valore
+FROM (influenzare JOIN oggetti ON influenzare.oggetto = oggetti.nome) JOIN inventario ON inventario.oggetto = oggetti.nome
+WHERE influenzare.statistica = "carisma"
+ORDER BY inventario.personaggio;
+
+set profiling=0;
+show profiles;
